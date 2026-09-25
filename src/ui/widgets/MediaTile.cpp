@@ -291,9 +291,10 @@ void MediaTile::contextMenuEvent(QContextMenuEvent *event)
     menu.addAction(tr("Download"), this, [this] { emit downloadRequested(m_asset); });
     menu.addSeparator();
     if (m_pinned)
-        menu.addAction(tr("Remove offline copy"), this, [this] { emit unpinRequested(m_asset); });
+        menu.addAction(tr("Remove from this device"), this,
+                      [this] { emit unpinRequested(m_asset); });
     else
-        menu.addAction(tr("Keep offline"), this, [this] { emit pinRequested(m_asset); });
+        menu.addAction(tr("Keep on this device"), this, [this] { emit pinRequested(m_asset); });
     menu.addSeparator();
     menu.addAction(tr("Move to trash"), this, [this] { emit trashRequested(m_asset); });
     menu.addAction(tr("Delete permanently"), this, [this] { emit deleteRequested(m_asset); });

@@ -78,8 +78,8 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     , m_refreshButton(new QPushButton(tr("Refresh"), this))
     , m_selectionBar(new QWidget(this))
     , m_selectionCountLabel(new QLabel(this))
-    , m_selectionPinButton(new QPushButton(tr("Keep offline"), this))
-    , m_selectionUnpinButton(new QPushButton(tr("Remove offline copy"), this))
+    , m_selectionPinButton(new QPushButton(tr("Keep on this device"), this))
+    , m_selectionUnpinButton(new QPushButton(tr("Remove from this device"), this))
     , m_selectionClearButton(new QPushButton(tr("Clear selection"), this))
     , m_layoutTimer(new QTimer(this))
     , m_visibilityTimer(new QTimer(this))
@@ -217,6 +217,8 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     connect(m_client, &ImmichClient::assetUnpinned, this, &LibraryPage::handleAssetUnpinned);
     connect(m_client, &ImmichClient::assetPinFailed, this, &LibraryPage::handleAssetPinFailed);
     connect(m_client, &ImmichClient::assetsDeleted, this, &LibraryPage::handleAssetsDeleted);
+    connect(m_client, &ImmichClient::assetsQueuedForDeletion,
+            this, &LibraryPage::handleAssetsQueuedForDeletion);
     connect(m_client, &ImmichClient::activeEndpointChanged,
             this, &LibraryPage::handleActiveEndpointChanged);
     connect(m_client, &ImmichClient::onlineChanged, this, &LibraryPage::handleOnlineChanged);
@@ -745,10 +747,16 @@ void LibraryPage::handleActiveEndpointChanged(bool usingLocal, const QString &ac
 void LibraryPage::handleOnlineChanged(bool online)
 {
     if (online) {
-        if (m_showingCached || m_client->pendingUploadCount() > 0) {
-            m_status->setText(m_client->pendingUploadCount() > 0
-                                  ? tr("Back online — resuming uploads…")
-                                  : tr("Back online — refreshing…"));
+        const int pendingUploads = m_client->pendingUploadCount();
+        const int pendingDeletes = m_client->pendingDeleteCount();
+        if (m_showingCached || pendingUploads > 0 || pendingDeletes > 0) {
+            if (pendingUploads > 0)
+                m_status->setText(tr("Back online — resuming uploads…"));
+            else if (pendingDeletes > 0)
+                m_status->setText(tr("Back online — finishing %n pending deletion(s)…",
+                                     nullptr, pendingDeletes));
+            else
+                m_status->setText(tr("Back online — refreshing…"));
             if (m_showingCached)
                 refresh();
         }
@@ -783,6 +791,11 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
                     if (ids.contains(id))
                         player->close();
                 });
+        connect(m_client, &ImmichClient::assetsQueuedForDeletion, player,
+                [player, id = asset.id](const QStringList &ids, bool) {
+                    if (ids.contains(id))
+                        player->close();
+                });
         player->show();
         return;
     }
@@ -802,11 +815,12 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
     auto *buttons = new QDialogButtonBox(dialog);
     auto *copyButton = buttons->addButton(tr("Copy"), QDialogButtonBox::ActionRole);
     auto *downloadButton = buttons->addButton(tr("Download"), QDialogButtonBox::ActionRole);
-    auto *offlineButton = buttons->addButton(tr("Keep offline"), QDialogButtonBox::ActionRole);
+    auto *offlineButton =
+        buttons->addButton(tr("Keep on this device"), QDialogButtonBox::ActionRole);
     offlineButton->setCheckable(true);
     offlineButton->setChecked(m_client->isAssetPinned(asset.id));
-    offlineButton->setText(offlineButton->isChecked() ? tr("Available offline")
-                                                       : tr("Keep offline"));
+    offlineButton->setText(offlineButton->isChecked() ? tr("On this device")
+                                                       : tr("Keep on this device"));
     auto *trashButton = buttons->addButton(tr("Move to trash"), QDialogButtonBox::ActionRole);
     auto *deleteButton =
         buttons->addButton(tr("Delete permanently"), QDialogButtonBox::DestructiveRole);
@@ -835,26 +849,31 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
                 if (ids.contains(id))
                     dialog->close();
             });
+    connect(m_client, &ImmichClient::assetsQueuedForDeletion, dialog,
+            [dialog, id = asset.id](const QStringList &ids, bool) {
+                if (ids.contains(id))
+                    dialog->close();
+            });
     connect(m_client, &ImmichClient::assetPinned, offlineButton,
             [offlineButton, id = asset.id](const QString &assetId) {
                 if (assetId != id)
                     return;
                 offlineButton->setChecked(true);
-                offlineButton->setText(LibraryPage::tr("Available offline"));
+                offlineButton->setText(LibraryPage::tr("On this device"));
             });
     connect(m_client, &ImmichClient::assetUnpinned, offlineButton,
             [offlineButton, id = asset.id](const QString &assetId) {
                 if (assetId != id)
                     return;
                 offlineButton->setChecked(false);
-                offlineButton->setText(LibraryPage::tr("Keep offline"));
+                offlineButton->setText(LibraryPage::tr("Keep on this device"));
             });
     connect(m_client, &ImmichClient::assetPinFailed, offlineButton,
             [offlineButton, id = asset.id](const QString &assetId, const QString &) {
                 if (assetId != id)
                     return;
                 offlineButton->setChecked(false);
-                offlineButton->setText(LibraryPage::tr("Keep offline"));
+                offlineButton->setText(LibraryPage::tr("Keep on this device"));
             });
     layout->addWidget(buttons);
 
@@ -1041,7 +1060,7 @@ void LibraryPage::pinAsset(const ImmichAsset &asset)
 {
     if (!m_client->isConfigured() || asset.id.isEmpty())
         return;
-    m_status->setText(tr("Keeping %1 available offline…")
+    m_status->setText(tr("Keeping %1 on this device…")
                           .arg(asset.fileName.isEmpty() ? tr("photo") : asset.fileName));
     m_client->pinAssetOffline(asset.id);
 }
@@ -1057,20 +1076,20 @@ void LibraryPage::handleAssetPinned(const QString &assetId)
 {
     if (MediaTile *tile = m_tilesById.value(assetId))
         tile->setPinned(true);
-    m_status->setText(tr("Available offline."));
+    m_status->setText(tr("Saved to this device."));
 }
 
 void LibraryPage::handleAssetUnpinned(const QString &assetId)
 {
     if (MediaTile *tile = m_tilesById.value(assetId))
         tile->setPinned(false);
-    m_status->setText(tr("Removed offline copy."));
+    m_status->setText(tr("Removed from this device."));
 }
 
 void LibraryPage::handleAssetPinFailed(const QString &assetId, const QString &message)
 {
     Q_UNUSED(assetId);
-    m_status->setText(tr("Couldn't keep this available offline: %1").arg(message));
+    m_status->setText(tr("Couldn't save this to this device: %1").arg(message));
 }
 
 int LibraryPage::assetIndex(const QString &assetId) const
@@ -1158,7 +1177,7 @@ void LibraryPage::pinSelectedAssets()
     const QStringList ids(m_selectedAssetIds.constBegin(), m_selectedAssetIds.constEnd());
     for (const QString &id : ids)
         m_client->pinAssetOffline(id);
-    m_status->setText(tr("Keeping %n item(s) available offline…", nullptr, ids.size()));
+    m_status->setText(tr("Keeping %n item(s) on this device…", nullptr, ids.size()));
 }
 
 void LibraryPage::unpinSelectedAssets()
@@ -1168,7 +1187,7 @@ void LibraryPage::unpinSelectedAssets()
     const QStringList ids(m_selectedAssetIds.constBegin(), m_selectedAssetIds.constEnd());
     for (const QString &id : ids)
         m_client->unpinAssetOffline(id);
-    m_status->setText(tr("Removed offline copies for %n item(s).", nullptr, ids.size()));
+    m_status->setText(tr("Removed %n item(s) from this device.", nullptr, ids.size()));
 }
 
 void LibraryPage::clearSelection()
@@ -1214,6 +1233,17 @@ void LibraryPage::handleAssetsDeleted(const QStringList &assetIds, bool permanen
     m_status->setText(permanent ? tr("Deleted %n item(s).", nullptr, assetIds.size())
                                 : tr("Moved %n item(s) to trash.", nullptr, assetIds.size()));
     updateEndpointHint();
+}
+
+void LibraryPage::handleAssetsQueuedForDeletion(const QStringList &assetIds, bool permanent)
+{
+    removeAssetsFromTimeline(assetIds);
+    m_status->setText(
+        permanent
+            ? tr("Queued %n item(s) for deletion — will finish when you're back online.",
+                nullptr, assetIds.size())
+            : tr("Queued %n item(s) to move to trash — will finish when you're back online.",
+                nullptr, assetIds.size()));
 }
 
 void LibraryPage::removeAssetsFromTimeline(const QStringList &assetIds)

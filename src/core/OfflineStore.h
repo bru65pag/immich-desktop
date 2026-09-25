@@ -24,6 +24,11 @@ public:
     bool isAssetPinned(const QString &serverUrl, const QString &assetId) const;
     QStringList pinnedAssetIds(const QString &serverUrl) const;
 
+    // Removes deleted assets from the cached library snapshot and clears
+    // their pinned flag, so they don't resurface when browsing offline and
+    // don't leak pinned-cache storage forever.
+    void purgeAssets(const QString &serverUrl, const QStringList &assetIds);
+
     QString directory() const;
 
 private:

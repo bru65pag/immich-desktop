@@ -272,4 +272,27 @@ QStringList OfflineStore::pinnedAssetIds(const QString &serverUrl) const
     return ids;
 }
 
+void OfflineStore::purgeAssets(const QString &serverUrl, const QStringList &assetIds)
+{
+    if (serverUrl.isEmpty() || assetIds.isEmpty())
+        return;
+
+    QList<ImmichAsset> assets;
+    QString query;
+    if (loadLibrary(serverUrl, &assets, &query)) {
+        const QSet<QString> toRemove(assetIds.begin(), assetIds.end());
+        QList<ImmichAsset> filtered;
+        filtered.reserve(assets.size());
+        for (const ImmichAsset &asset : assets) {
+            if (!toRemove.contains(asset.id))
+                filtered.append(asset);
+        }
+        if (filtered.size() != assets.size())
+            saveLibrary(serverUrl, filtered, query);
+    }
+
+    for (const QString &id : assetIds)
+        setAssetPinned(serverUrl, id, false);
+}
+
 } // namespace Aurora

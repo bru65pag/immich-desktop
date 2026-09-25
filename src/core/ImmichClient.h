@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AppSettings.h"
+#include "core/DeleteQueueStore.h"
 #include "core/ImmichTypes.h"
 #include "core/OfflineStore.h"
 #include "core/ThumbnailCache.h"
@@ -62,6 +63,7 @@ public:
     bool isUploading() const;
     bool isDownloading() const;
     int pendingUploadCount() const;
+    int pendingDeleteCount() const;
     int activeDownloadCount() const;
     QUrl videoStreamUrl(const QString &assetId);
 
@@ -89,6 +91,7 @@ signals:
     void assetOriginalFetched(const QString &assetId, const QByteArray &bytes,
                               const QString &contentType);
     void assetsDeleted(const QStringList &assetIds, bool permanent);
+    void assetsQueuedForDeletion(const QStringList &assetIds, bool permanent);
     void assetPinned(const QString &assetId);
     void assetUnpinned(const QString &assetId);
     void assetPinFailed(const QString &assetId, const QString &message);
@@ -119,6 +122,11 @@ private:
     void restoreUploadQueue();
     void requeueUpload(const QString &filePath, bool toFront = true);
     void scheduleUploadRetry(int delayMs = 1500);
+    void performDelete(const QStringList &assetIds, bool permanent);
+    void purgeLocalAssetData(const QStringList &assetIds);
+    void processDeleteQueue();
+    void persistDeleteQueue();
+    void restoreDeleteQueue();
     void beginActiveDownload();
     void endActiveDownload();
     void probeEndpoints();
@@ -138,6 +146,9 @@ private:
     ThumbnailCache m_pinnedCache{QStringLiteral("previews-pinned"), 32 * 1024};
     OfflineStore m_offlineStore;
     UploadQueueStore m_uploadQueueStore;
+    DeleteQueueStore m_deleteQueueStore;
+    QList<PendingDeletion> m_pendingDeletes;
+    bool m_processingDeleteQueue = false;
     QThreadPool m_imagePool;
     QTimer *m_endpointProbeTimer;
     QTimer *m_reachabilityTimer;

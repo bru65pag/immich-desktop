@@ -26,6 +26,7 @@
 #include <QUrlQuery>
 
 #include <memory>
+#include <utility>
 
 namespace Aurora {
 namespace {
@@ -100,12 +101,14 @@ ImmichClient::ImmichClient(QObject *parent)
     connect(m_reachabilityTimer, &QTimer::timeout, this, &ImmichClient::probeReachability);
     setupNetworkMonitoring();
     restoreUploadQueue();
+    restoreDeleteQueue();
     if (isConfigured()) {
         m_endpointProbeTimer->start();
         m_reachabilityTimer->start();
         QTimer::singleShot(0, this, &ImmichClient::probeEndpoints);
         QTimer::singleShot(0, this, &ImmichClient::probeReachability);
         QTimer::singleShot(2000, this, &ImmichClient::processUploadQueue);
+        QTimer::singleShot(2000, this, &ImmichClient::processDeleteQueue);
     }
 }
 
@@ -204,8 +207,10 @@ void ImmichClient::setOnline(bool online)
         return;
     m_online = online;
     emit onlineChanged(m_online);
-    if (m_online)
+    if (m_online) {
         processUploadQueue();
+        processDeleteQueue();
+    }
 }
 
 bool ImmichClient::isTransientNetworkError(QNetworkReply *reply)
@@ -1333,9 +1338,25 @@ void ImmichClient::deleteAssets(const QStringList &assetIds, bool permanent)
         return;
     }
 
+    if (!m_online) {
+        for (const QString &id : ids)
+            m_pendingDeletes.append({id, permanent});
+        persistDeleteQueue();
+        // Purge now so the offline library snapshot and caches don't
+        // resurrect this asset on a refresh before the queued delete lands.
+        purgeLocalAssetData(ids);
+        emit assetsQueuedForDeletion(ids, permanent);
+        return;
+    }
+
+    performDelete(ids, permanent);
+}
+
+void ImmichClient::performDelete(const QStringList &assetIds, bool permanent)
+{
     QJsonObject body;
     QJsonArray idArray;
-    for (const QString &id : ids)
+    for (const QString &id : assetIds)
         idArray.append(id);
     body.insert(QStringLiteral("ids"), idArray);
     body.insert(QStringLiteral("force"), permanent);
@@ -1347,15 +1368,74 @@ void ImmichClient::deleteAssets(const QStringList &assetIds, bool permanent)
     auto *reply = m_network->sendCustomRequest(
         request, QByteArrayLiteral("DELETE"),
         QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [this, reply, ids, permanent] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, assetIds, permanent] {
         const QByteArray body = reply->readAll();
         if (reply->error() != QNetworkReply::NoError) {
-            emit requestFailed(tr("Delete"), errorMessage(reply, body));
+            if (isTransientNetworkError(reply)) {
+                setOnline(false);
+                for (const QString &id : assetIds)
+                    m_pendingDeletes.append({id, permanent});
+                persistDeleteQueue();
+                purgeLocalAssetData(assetIds);
+                emit assetsQueuedForDeletion(assetIds, permanent);
+            } else {
+                emit requestFailed(tr("Delete"), errorMessage(reply, body));
+            }
         } else {
-            emit assetsDeleted(ids, permanent);
+            purgeLocalAssetData(assetIds);
+            emit assetsDeleted(assetIds, permanent);
         }
         reply->deleteLater();
     });
+}
+
+void ImmichClient::purgeLocalAssetData(const QStringList &assetIds)
+{
+    for (const QString &id : assetIds) {
+        m_thumbnailCache.remove(id);
+        m_previewCache.remove(id);
+        m_pinnedCache.remove(id);
+    }
+    m_offlineStore.purgeAssets(activeServerUrl(), assetIds);
+}
+
+void ImmichClient::processDeleteQueue()
+{
+    if (m_processingDeleteQueue || !m_online || m_pendingDeletes.isEmpty())
+        return;
+
+    m_processingDeleteQueue = true;
+    QStringList trashIds;
+    QStringList permanentIds;
+    for (const PendingDeletion &item : std::as_const(m_pendingDeletes)) {
+        if (item.permanent)
+            permanentIds.append(item.assetId);
+        else
+            trashIds.append(item.assetId);
+    }
+    m_pendingDeletes.clear();
+    persistDeleteQueue();
+    m_processingDeleteQueue = false;
+
+    if (!trashIds.isEmpty())
+        performDelete(trashIds, false);
+    if (!permanentIds.isEmpty())
+        performDelete(permanentIds, true);
+}
+
+void ImmichClient::persistDeleteQueue()
+{
+    m_deleteQueueStore.save(m_pendingDeletes);
+}
+
+void ImmichClient::restoreDeleteQueue()
+{
+    m_pendingDeletes = m_deleteQueueStore.load();
+}
+
+int ImmichClient::pendingDeleteCount() const
+{
+    return m_pendingDeletes.size();
 }
 
 void ImmichClient::pinAssetOffline(const QString &assetId)

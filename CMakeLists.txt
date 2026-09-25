@@ -33,6 +33,8 @@ set(IMMICH_SOURCES
     src/core/AppSettings.h
     src/core/AutoStart.cpp
     src/core/AutoStart.h
+    src/core/DeleteQueueStore.cpp
+    src/core/DeleteQueueStore.h
     src/core/ImmichClient.cpp
     src/core/ImmichClient.h
     src/core/ImmichTypes.h

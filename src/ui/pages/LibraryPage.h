@@ -72,6 +72,7 @@ private slots:
     void unpinSelectedAssets();
     void clearSelection();
     void handleAssetsDeleted(const QStringList &assetIds, bool permanent);
+    void handleAssetsQueuedForDeletion(const QStringList &assetIds, bool permanent);
     void handleUploadProgress(const QString &filePath, qint64 bytesSent, qint64 bytesTotal);
     void handleAssetUploaded(const QString &filePath, const QString &assetId, bool duplicate);
     void handleDownloadProgress(const QString &assetId, qint64 bytesReceived, qint64 bytesTotal);
