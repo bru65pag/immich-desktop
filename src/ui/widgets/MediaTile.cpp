@@ -127,12 +127,34 @@ void MediaTile::paintEvent(QPaintEvent *)
                          m_hasError ? m_error : tr("…"));
     }
 
+    constexpr int kPinBadgeDiameter = 22;
+    constexpr int kPinBadgeMargin = 8;
+    QRect pinBadgeRect;
+    if (m_pinned) {
+        pinBadgeRect = QRect(width() - kPinBadgeMargin - kPinBadgeDiameter, kPinBadgeMargin,
+                             kPinBadgeDiameter, kPinBadgeDiameter);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 140));
+        painter.drawEllipse(pinBadgeRect);
+
+        const QPixmap offlineIcon = renderSvgIcon(
+            QStringLiteral(":/icons/cloud-download.svg"), Qt::white, QSize(14, 14));
+        if (!offlineIcon.isNull()) {
+            const QPoint iconPos(
+                pinBadgeRect.center().x() - offlineIcon.width() / 2,
+                pinBadgeRect.center().y() - offlineIcon.height() / 2);
+            painter.drawPixmap(iconPos, offlineIcon);
+        }
+    }
+
     if (m_asset.isVideo() && !m_hoverPreviewActive) {
         const QString duration = formatDuration(m_asset.duration);
         const QPixmap playIcon =
             renderSvgIcon(QStringLiteral(":/icons/play.svg"), Qt::white, QSize(18, 18));
 
         int right = width() - 8;
+        if (m_pinned)
+            right = pinBadgeRect.left() - 8;
         if (!playIcon.isNull()) {
             const int iconX = right - playIcon.width();
             const int iconY = 8;
@@ -156,31 +178,58 @@ void MediaTile::paintEvent(QPaintEvent *)
         }
     }
 
-    if (hasFocus()) {
+    if (m_selected) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(166, 133, 226, 70));
+        painter.drawRect(rect());
+        painter.setPen(QPen(QColor(166, 133, 226), 3));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(rect().adjusted(1, 1, -1, -1));
+    } else if (hasFocus()) {
         painter.setPen(QPen(QColor(166, 133, 226), 2));
         painter.setBrush(Qt::NoBrush);
         painter.drawRect(rect().adjusted(1, 1, -1, -1));
+    }
+
+    if (checkboxVisible()) {
+        const QRect box = checkboxRect();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(m_selected ? QColor(166, 133, 226) : QColor(0, 0, 0, 140));
+        painter.drawEllipse(box);
+        if (m_selected) {
+            QPen checkPen(Qt::white, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            painter.setPen(checkPen);
+            const QPointF c = box.center();
+            painter.drawLine(QPointF(c.x() - 4.5, c.y() + 0.5), QPointF(c.x() - 1.2, c.y() + 3.8));
+            painter.drawLine(QPointF(c.x() - 1.2, c.y() + 3.8), QPointF(c.x() + 4.8, c.y() - 3.5));
+        } else {
+            painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(box.adjusted(4, 4, -4, -4));
+        }
     }
 }
 
 void MediaTile::enterEvent(QEnterEvent *event)
 {
     emit highlighted(m_asset);
+    m_hovered = true;
     if (m_hoverPreview && m_asset.isVideo()) {
         m_hoverPreviewActive = true;
         m_hoverPreview->showForTile(this);
-        update();
     }
+    update();
     QWidget::enterEvent(event);
 }
 
 void MediaTile::leaveEvent(QEvent *event)
 {
+    m_hovered = false;
     if (m_hoverPreview && m_hoverPreviewActive) {
         m_hoverPreviewActive = false;
         m_hoverPreview->hideForTile(this);
-        update();
     }
+    update();
     QWidget::leaveEvent(event);
 }
 
@@ -209,17 +258,27 @@ void MediaTile::keyPressEvent(QKeyEvent *event)
 
 void MediaTile::mousePressEvent(QMouseEvent *event)
 {
+    m_pressedOnCheckbox = false;
     if (event->button() == Qt::LeftButton) {
         setFocus(Qt::MouseFocusReason);
         emit highlighted(m_asset);
+        if (checkboxVisible() && checkboxRect().contains(event->position().toPoint())) {
+            m_pressedOnCheckbox = true;
+            if (event->modifiers() & Qt::ShiftModifier)
+                emit rangeSelectRequested(m_asset);
+            else
+                emit toggleSelectRequested(m_asset);
+        }
     }
     QWidget::mousePressEvent(event);
 }
 
 void MediaTile::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()))
+    if (event->button() == Qt::LeftButton && !m_pressedOnCheckbox &&
+        rect().contains(event->position().toPoint()))
         emit activated(m_asset);
+    m_pressedOnCheckbox = false;
     QWidget::mouseReleaseEvent(event);
 }
 
@@ -243,12 +302,48 @@ void MediaTile::contextMenuEvent(QContextMenuEvent *event)
 
 void MediaTile::setPinned(bool pinned)
 {
+    if (m_pinned == pinned)
+        return;
     m_pinned = pinned;
+    update();
 }
 
 bool MediaTile::isPinned() const
 {
     return m_pinned;
+}
+
+void MediaTile::setSelected(bool selected)
+{
+    if (m_selected == selected)
+        return;
+    m_selected = selected;
+    update();
+}
+
+bool MediaTile::isSelected() const
+{
+    return m_selected;
+}
+
+void MediaTile::setSelectionModeActive(bool active)
+{
+    if (m_selectionModeActive == active)
+        return;
+    m_selectionModeActive = active;
+    update();
+}
+
+QRect MediaTile::checkboxRect() const
+{
+    constexpr int kDiameter = 22;
+    constexpr int kMargin = 8;
+    return QRect(kMargin, kMargin, kDiameter, kDiameter);
+}
+
+bool MediaTile::checkboxVisible() const
+{
+    return m_selected || m_selectionModeActive || m_hovered;
 }
 
 } // namespace Aurora

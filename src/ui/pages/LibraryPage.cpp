@@ -76,6 +76,11 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     , m_searchField(new QLineEdit(this))
     , m_uploadButton(new QPushButton(tr("Upload"), this))
     , m_refreshButton(new QPushButton(tr("Refresh"), this))
+    , m_selectionBar(new QWidget(this))
+    , m_selectionCountLabel(new QLabel(this))
+    , m_selectionPinButton(new QPushButton(tr("Keep offline"), this))
+    , m_selectionUnpinButton(new QPushButton(tr("Remove offline copy"), this))
+    , m_selectionClearButton(new QPushButton(tr("Clear selection"), this))
     , m_layoutTimer(new QTimer(this))
     , m_visibilityTimer(new QTimer(this))
     , m_autoCheckTimer(new QTimer(this))
@@ -124,6 +129,17 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     toolbarLayout->addWidget(m_uploadButton);
     toolbarLayout->addWidget(m_refreshButton);
 
+    m_selectionBar->setObjectName(QStringLiteral("librarySelectionBar"));
+    auto *selectionLayout = new QHBoxLayout(m_selectionBar);
+    selectionLayout->setContentsMargins(16, 8, 16, 8);
+    selectionLayout->setSpacing(12);
+    m_selectionCountLabel->setProperty("subheading", true);
+    selectionLayout->addWidget(m_selectionCountLabel, 1);
+    selectionLayout->addWidget(m_selectionPinButton);
+    selectionLayout->addWidget(m_selectionUnpinButton);
+    selectionLayout->addWidget(m_selectionClearButton);
+    m_selectionBar->setVisible(false);
+
     m_timelineHost->setObjectName(QStringLiteral("timelineHost"));
     m_timelineHost->setAcceptDrops(true);
     m_timelineHost->installEventFilter(this);
@@ -165,11 +181,16 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     m_dropOverlay->raise();
 
     root->addWidget(toolbar);
+    root->addWidget(m_selectionBar);
     root->addWidget(m_emptyState);
     root->addWidget(m_scrollArea, 1);
 
     connect(m_uploadButton, &QPushButton::clicked, this, &LibraryPage::chooseFilesToUpload);
     connect(m_refreshButton, &QPushButton::clicked, this, &LibraryPage::refresh);
+    connect(m_selectionPinButton, &QPushButton::clicked, this, &LibraryPage::pinSelectedAssets);
+    connect(m_selectionUnpinButton, &QPushButton::clicked,
+            this, &LibraryPage::unpinSelectedAssets);
+    connect(m_selectionClearButton, &QPushButton::clicked, this, &LibraryPage::clearSelection);
     connect(m_searchField, &QLineEdit::textChanged, this, [this] {
         m_searchDebounce->start();
     });
@@ -375,6 +396,8 @@ void LibraryPage::showAssets(const QList<ImmichAsset> &assets, const QString &ne
         auto *tile = new MediaTile(asset, m_timelineHost);
         tile->setHoverPreview(m_videoHoverPreview);
         tile->setPinned(m_client->isAssetPinned(asset.id));
+        tile->setSelected(m_selectedAssetIds.contains(asset.id));
+        tile->setSelectionModeActive(m_selectionModeActive);
         section->tiles.append(tile);
         m_tilesById.insert(asset.id, tile);
         connect(tile, &MediaTile::activated, this, &LibraryPage::openAsset);
@@ -387,6 +410,10 @@ void LibraryPage::showAssets(const QList<ImmichAsset> &assets, const QString &ne
         connect(tile, &MediaTile::deleteRequested, this, &LibraryPage::deleteAssetPermanently);
         connect(tile, &MediaTile::pinRequested, this, &LibraryPage::pinAsset);
         connect(tile, &MediaTile::unpinRequested, this, &LibraryPage::unpinAsset);
+        connect(tile, &MediaTile::toggleSelectRequested,
+                this, &LibraryPage::handleTileToggleSelect);
+        connect(tile, &MediaTile::rangeSelectRequested,
+                this, &LibraryPage::handleTileRangeSelect);
     }
 
     if (!m_appendRequest && !m_assets.isEmpty())
@@ -502,6 +529,9 @@ void LibraryPage::clearTimeline()
     m_assets.clear();
     m_nextPage.clear();
     m_newestAssetId.clear();
+    m_selectedAssetIds.clear();
+    m_selectionAnchorId.clear();
+    updateSelectionBar();
 }
 
 void LibraryPage::layoutTimeline()
@@ -736,6 +766,8 @@ void LibraryPage::handleUploadQueueChanged(int pendingCount)
 
 void LibraryPage::openAsset(const ImmichAsset &asset)
 {
+    if (!m_selectedAssetIds.isEmpty())
+        clearSelection();
     m_currentAsset = asset;
     if (asset.isVideo()) {
         if (m_videoHoverPreview)
@@ -1039,6 +1071,113 @@ void LibraryPage::handleAssetPinFailed(const QString &assetId, const QString &me
 {
     Q_UNUSED(assetId);
     m_status->setText(tr("Couldn't keep this available offline: %1").arg(message));
+}
+
+int LibraryPage::assetIndex(const QString &assetId) const
+{
+    for (int i = 0; i < m_assets.size(); ++i) {
+        if (m_assets.at(i).id == assetId)
+            return i;
+    }
+    return -1;
+}
+
+void LibraryPage::setTileSelected(const QString &assetId, bool selected)
+{
+    if (MediaTile *tile = m_tilesById.value(assetId))
+        tile->setSelected(selected);
+}
+
+void LibraryPage::updateSelectionBar()
+{
+    const int count = m_selectedAssetIds.size();
+    m_selectionBar->setVisible(count > 0);
+    if (count > 0)
+        m_selectionCountLabel->setText(tr("%n item(s) selected", nullptr, count));
+
+    const bool active = count > 0;
+    if (active != m_selectionModeActive) {
+        m_selectionModeActive = active;
+        for (MediaTile *tile : std::as_const(m_tilesById))
+            tile->setSelectionModeActive(active);
+    }
+}
+
+void LibraryPage::handleTileToggleSelect(const ImmichAsset &asset)
+{
+    if (asset.id.isEmpty())
+        return;
+    const bool nowSelected = !m_selectedAssetIds.contains(asset.id);
+    if (nowSelected)
+        m_selectedAssetIds.insert(asset.id);
+    else
+        m_selectedAssetIds.remove(asset.id);
+    m_selectionAnchorId = asset.id;
+    setTileSelected(asset.id, nowSelected);
+    updateSelectionBar();
+}
+
+void LibraryPage::handleTileRangeSelect(const ImmichAsset &asset)
+{
+    if (asset.id.isEmpty())
+        return;
+    if (m_selectionAnchorId.isEmpty()) {
+        handleTileToggleSelect(asset);
+        return;
+    }
+
+    const int anchorIndex = assetIndex(m_selectionAnchorId);
+    const int targetIndex = assetIndex(asset.id);
+    if (anchorIndex < 0 || targetIndex < 0) {
+        handleTileToggleSelect(asset);
+        return;
+    }
+
+    const int lo = qMin(anchorIndex, targetIndex);
+    const int hi = qMax(anchorIndex, targetIndex);
+
+    const QSet<QString> previousSelection = m_selectedAssetIds;
+    m_selectedAssetIds.clear();
+    for (int i = lo; i <= hi; ++i)
+        m_selectedAssetIds.insert(m_assets.at(i).id);
+
+    for (const QString &id : previousSelection) {
+        if (!m_selectedAssetIds.contains(id))
+            setTileSelected(id, false);
+    }
+    for (const QString &id : m_selectedAssetIds)
+        setTileSelected(id, true);
+
+    updateSelectionBar();
+}
+
+void LibraryPage::pinSelectedAssets()
+{
+    if (m_selectedAssetIds.isEmpty())
+        return;
+    const QStringList ids(m_selectedAssetIds.constBegin(), m_selectedAssetIds.constEnd());
+    for (const QString &id : ids)
+        m_client->pinAssetOffline(id);
+    m_status->setText(tr("Keeping %n item(s) available offline…", nullptr, ids.size()));
+}
+
+void LibraryPage::unpinSelectedAssets()
+{
+    if (m_selectedAssetIds.isEmpty())
+        return;
+    const QStringList ids(m_selectedAssetIds.constBegin(), m_selectedAssetIds.constEnd());
+    for (const QString &id : ids)
+        m_client->unpinAssetOffline(id);
+    m_status->setText(tr("Removed offline copies for %n item(s).", nullptr, ids.size()));
+}
+
+void LibraryPage::clearSelection()
+{
+    for (const QString &id : m_selectedAssetIds)
+        setTileSelected(id, false);
+    m_selectedAssetIds.clear();
+    m_selectionAnchorId.clear();
+    updateSelectionBar();
 }
 
 void LibraryPage::confirmAndDelete(const ImmichAsset &asset, bool permanent)

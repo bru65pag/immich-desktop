@@ -3,6 +3,7 @@
 #include "core/ImmichTypes.h"
 
 #include <QPixmap>
+#include <QRect>
 #include <QWidget>
 
 class QContextMenuEvent;
@@ -34,6 +35,9 @@ public:
     void endHoverPreview();
     void setPinned(bool pinned);
     bool isPinned() const;
+    void setSelected(bool selected);
+    bool isSelected() const;
+    void setSelectionModeActive(bool active);
 
 signals:
     void activated(const Aurora::ImmichAsset &asset);
@@ -44,6 +48,8 @@ signals:
     void deleteRequested(const Aurora::ImmichAsset &asset);
     void pinRequested(const Aurora::ImmichAsset &asset);
     void unpinRequested(const Aurora::ImmichAsset &asset);
+    void toggleSelectRequested(const Aurora::ImmichAsset &asset);
+    void rangeSelectRequested(const Aurora::ImmichAsset &asset);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -57,6 +63,8 @@ protected:
 
 private:
     static QString formatDuration(const QString &raw);
+    QRect checkboxRect() const;
+    bool checkboxVisible() const;
 
     VideoHoverPreview *m_hoverPreview = nullptr;
     ImmichAsset m_asset;
@@ -66,6 +74,10 @@ private:
     bool m_hasError = false;
     bool m_hoverPreviewActive = false;
     bool m_pinned = false;
+    bool m_selected = false;
+    bool m_selectionModeActive = false;
+    bool m_hovered = false;
+    bool m_pressedOnCheckbox = false;
 };
 
 } // namespace Aurora

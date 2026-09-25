@@ -66,6 +66,11 @@ private slots:
     void handleAssetPinned(const QString &assetId);
     void handleAssetUnpinned(const QString &assetId);
     void handleAssetPinFailed(const QString &assetId, const QString &message);
+    void handleTileToggleSelect(const Aurora::ImmichAsset &asset);
+    void handleTileRangeSelect(const Aurora::ImmichAsset &asset);
+    void pinSelectedAssets();
+    void unpinSelectedAssets();
+    void clearSelection();
     void handleAssetsDeleted(const QStringList &assetIds, bool permanent);
     void handleUploadProgress(const QString &filePath, qint64 bytesSent, qint64 bytesTotal);
     void handleAssetUploaded(const QString &filePath, const QString &assetId, bool duplicate);
@@ -108,6 +113,9 @@ private:
     bool handleDragEvent(QEvent *event);
     QString formatDayHeader(const QDate &date) const;
     DaySection *sectionForDate(const QDate &date);
+    int assetIndex(const QString &assetId) const;
+    void updateSelectionBar();
+    void setTileSelected(const QString &assetId, bool selected);
 
     ImmichClient *m_client;
     QScrollArea *m_scrollArea;
@@ -119,12 +127,20 @@ private:
     QLineEdit *m_searchField;
     QPushButton *m_uploadButton;
     QPushButton *m_refreshButton;
+    QWidget *m_selectionBar;
+    QLabel *m_selectionCountLabel;
+    QPushButton *m_selectionPinButton;
+    QPushButton *m_selectionUnpinButton;
+    QPushButton *m_selectionClearButton;
     QTimer *m_layoutTimer;
     QTimer *m_visibilityTimer;
     QTimer *m_autoCheckTimer;
     QTimer *m_searchDebounce;
     QList<DaySection> m_sections;
     QHash<QString, MediaTile *> m_tilesById;
+    QSet<QString> m_selectedAssetIds;
+    QString m_selectionAnchorId;
+    bool m_selectionModeActive = false;
     QSet<QString> m_requestedThumbnails;
     QList<ImmichAsset> m_assets;
     QString m_nextPage;
