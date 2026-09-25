@@ -96,6 +96,11 @@ QString OfflineStore::explorePath(const QString &serverUrl) const
     return m_directory + u'/' + serverKey(serverUrl) + QStringLiteral("-explore.json");
 }
 
+QString OfflineStore::pinnedPath(const QString &serverUrl) const
+{
+    return m_directory + u'/' + serverKey(serverUrl) + QStringLiteral("-pinned.json");
+}
+
 void OfflineStore::saveLibrary(const QString &serverUrl, const QList<ImmichAsset> &assets,
                                const QString &query)
 {
@@ -225,6 +230,46 @@ bool OfflineStore::loadExplore(const QString &serverUrl, ImmichExploreData *data
             data->recentAssets.append(asset);
     }
     return !data->people.isEmpty() || !data->places.isEmpty() || !data->recentAssets.isEmpty();
+}
+
+void OfflineStore::setAssetPinned(const QString &serverUrl, const QString &assetId, bool pinned)
+{
+    if (serverUrl.isEmpty() || assetId.isEmpty())
+        return;
+
+    QStringList ids = pinnedAssetIds(serverUrl);
+    const bool alreadyPinned = ids.contains(assetId);
+    if (pinned == alreadyPinned)
+        return;
+
+    if (pinned)
+        ids.append(assetId);
+    else
+        ids.removeAll(assetId);
+
+    QJsonArray items;
+    for (const QString &id : ids)
+        items.append(id);
+    QJsonObject root;
+    root.insert(QStringLiteral("serverUrl"), serverUrl);
+    root.insert(QStringLiteral("assetIds"), items);
+    writeJsonFile(pinnedPath(serverUrl), root);
+}
+
+bool OfflineStore::isAssetPinned(const QString &serverUrl, const QString &assetId) const
+{
+    return pinnedAssetIds(serverUrl).contains(assetId);
+}
+
+QStringList OfflineStore::pinnedAssetIds(const QString &serverUrl) const
+{
+    if (serverUrl.isEmpty())
+        return {};
+    const QJsonObject root = readJsonFile(pinnedPath(serverUrl));
+    QStringList ids;
+    for (const QJsonValue &value : root.value(QStringLiteral("assetIds")).toArray())
+        ids.append(value.toString());
+    return ids;
 }
 
 } // namespace Aurora

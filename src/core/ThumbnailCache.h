@@ -20,6 +20,7 @@ public:
     QPixmap memoryPixmap(const QString &assetId) const;
     QByteArray readDisk(const QString &assetId) const;
     void store(const QString &assetId, const QByteArray &bytes, const QPixmap &pixmap);
+    void remove(const QString &assetId);
     void clearMemory();
 
     QString directory() const;

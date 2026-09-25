@@ -32,6 +32,8 @@ public:
     void setTileSize(const QSize &size);
     void setHoverPreview(VideoHoverPreview *preview);
     void endHoverPreview();
+    void setPinned(bool pinned);
+    bool isPinned() const;
 
 signals:
     void activated(const Aurora::ImmichAsset &asset);
@@ -40,6 +42,8 @@ signals:
     void downloadRequested(const Aurora::ImmichAsset &asset);
     void trashRequested(const Aurora::ImmichAsset &asset);
     void deleteRequested(const Aurora::ImmichAsset &asset);
+    void pinRequested(const Aurora::ImmichAsset &asset);
+    void unpinRequested(const Aurora::ImmichAsset &asset);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -61,6 +65,7 @@ private:
     QString m_error;
     bool m_hasError = false;
     bool m_hoverPreviewActive = false;
+    bool m_pinned = false;
 };
 
 } // namespace Aurora

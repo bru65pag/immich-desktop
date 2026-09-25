@@ -20,11 +20,16 @@ public:
     void saveExplore(const QString &serverUrl, const ImmichExploreData &data);
     bool loadExplore(const QString &serverUrl, ImmichExploreData *data) const;
 
+    void setAssetPinned(const QString &serverUrl, const QString &assetId, bool pinned);
+    bool isAssetPinned(const QString &serverUrl, const QString &assetId) const;
+    QStringList pinnedAssetIds(const QString &serverUrl) const;
+
     QString directory() const;
 
 private:
     QString libraryPath(const QString &serverUrl) const;
     QString explorePath(const QString &serverUrl) const;
+    QString pinnedPath(const QString &serverUrl) const;
     static QString serverKey(const QString &serverUrl);
 
     QString m_directory;

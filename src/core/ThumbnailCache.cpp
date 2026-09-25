@@ -82,6 +82,16 @@ void ThumbnailCache::store(const QString &assetId, const QByteArray &bytes,
         trimDiskLocked();
 }
 
+void ThumbnailCache::remove(const QString &assetId)
+{
+    {
+        QMutexLocker lock(&m_mutex);
+        m_memory.remove(assetId);
+    }
+    QMutexLocker lock(&m_diskMutex);
+    QFile::remove(filePath(assetId));
+}
+
 void ThumbnailCache::clearMemory()
 {
     QMutexLocker lock(&m_mutex);

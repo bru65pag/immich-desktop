@@ -192,6 +192,9 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
             this, &LibraryPage::handleAssetDownloaded);
     connect(m_client, &ImmichClient::assetOriginalFetched,
             this, &LibraryPage::handleAssetOriginalFetched);
+    connect(m_client, &ImmichClient::assetPinned, this, &LibraryPage::handleAssetPinned);
+    connect(m_client, &ImmichClient::assetUnpinned, this, &LibraryPage::handleAssetUnpinned);
+    connect(m_client, &ImmichClient::assetPinFailed, this, &LibraryPage::handleAssetPinFailed);
     connect(m_client, &ImmichClient::assetsDeleted, this, &LibraryPage::handleAssetsDeleted);
     connect(m_client, &ImmichClient::activeEndpointChanged,
             this, &LibraryPage::handleActiveEndpointChanged);
@@ -371,6 +374,7 @@ void LibraryPage::showAssets(const QList<ImmichAsset> &assets, const QString &ne
         DaySection *section = sectionForDate(date);
         auto *tile = new MediaTile(asset, m_timelineHost);
         tile->setHoverPreview(m_videoHoverPreview);
+        tile->setPinned(m_client->isAssetPinned(asset.id));
         section->tiles.append(tile);
         m_tilesById.insert(asset.id, tile);
         connect(tile, &MediaTile::activated, this, &LibraryPage::openAsset);
@@ -381,6 +385,8 @@ void LibraryPage::showAssets(const QList<ImmichAsset> &assets, const QString &ne
         connect(tile, &MediaTile::downloadRequested, this, &LibraryPage::downloadAsset);
         connect(tile, &MediaTile::trashRequested, this, &LibraryPage::trashAsset);
         connect(tile, &MediaTile::deleteRequested, this, &LibraryPage::deleteAssetPermanently);
+        connect(tile, &MediaTile::pinRequested, this, &LibraryPage::pinAsset);
+        connect(tile, &MediaTile::unpinRequested, this, &LibraryPage::unpinAsset);
     }
 
     if (!m_appendRequest && !m_assets.isEmpty())
@@ -764,6 +770,11 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
     auto *buttons = new QDialogButtonBox(dialog);
     auto *copyButton = buttons->addButton(tr("Copy"), QDialogButtonBox::ActionRole);
     auto *downloadButton = buttons->addButton(tr("Download"), QDialogButtonBox::ActionRole);
+    auto *offlineButton = buttons->addButton(tr("Keep offline"), QDialogButtonBox::ActionRole);
+    offlineButton->setCheckable(true);
+    offlineButton->setChecked(m_client->isAssetPinned(asset.id));
+    offlineButton->setText(offlineButton->isChecked() ? tr("Available offline")
+                                                       : tr("Keep offline"));
     auto *trashButton = buttons->addButton(tr("Move to trash"), QDialogButtonBox::ActionRole);
     auto *deleteButton =
         buttons->addButton(tr("Delete permanently"), QDialogButtonBox::DestructiveRole);
@@ -773,6 +784,12 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
     });
     connect(downloadButton, &QPushButton::clicked, this, [this, asset] {
         downloadAsset(asset);
+    });
+    connect(offlineButton, &QPushButton::clicked, this, [this, asset](bool checked) {
+        if (checked)
+            pinAsset(asset);
+        else
+            unpinAsset(asset);
     });
     connect(trashButton, &QPushButton::clicked, this, [this, asset] {
         trashAsset(asset);
@@ -785,6 +802,27 @@ void LibraryPage::openAsset(const ImmichAsset &asset)
             [dialog, id = asset.id](const QStringList &ids, bool) {
                 if (ids.contains(id))
                     dialog->close();
+            });
+    connect(m_client, &ImmichClient::assetPinned, offlineButton,
+            [offlineButton, id = asset.id](const QString &assetId) {
+                if (assetId != id)
+                    return;
+                offlineButton->setChecked(true);
+                offlineButton->setText(LibraryPage::tr("Available offline"));
+            });
+    connect(m_client, &ImmichClient::assetUnpinned, offlineButton,
+            [offlineButton, id = asset.id](const QString &assetId) {
+                if (assetId != id)
+                    return;
+                offlineButton->setChecked(false);
+                offlineButton->setText(LibraryPage::tr("Keep offline"));
+            });
+    connect(m_client, &ImmichClient::assetPinFailed, offlineButton,
+            [offlineButton, id = asset.id](const QString &assetId, const QString &) {
+                if (assetId != id)
+                    return;
+                offlineButton->setChecked(false);
+                offlineButton->setText(LibraryPage::tr("Keep offline"));
             });
     layout->addWidget(buttons);
 
@@ -965,6 +1003,42 @@ void LibraryPage::trashAsset(const ImmichAsset &asset)
 void LibraryPage::deleteAssetPermanently(const ImmichAsset &asset)
 {
     confirmAndDelete(asset, true);
+}
+
+void LibraryPage::pinAsset(const ImmichAsset &asset)
+{
+    if (!m_client->isConfigured() || asset.id.isEmpty())
+        return;
+    m_status->setText(tr("Keeping %1 available offline…")
+                          .arg(asset.fileName.isEmpty() ? tr("photo") : asset.fileName));
+    m_client->pinAssetOffline(asset.id);
+}
+
+void LibraryPage::unpinAsset(const ImmichAsset &asset)
+{
+    if (asset.id.isEmpty())
+        return;
+    m_client->unpinAssetOffline(asset.id);
+}
+
+void LibraryPage::handleAssetPinned(const QString &assetId)
+{
+    if (MediaTile *tile = m_tilesById.value(assetId))
+        tile->setPinned(true);
+    m_status->setText(tr("Available offline."));
+}
+
+void LibraryPage::handleAssetUnpinned(const QString &assetId)
+{
+    if (MediaTile *tile = m_tilesById.value(assetId))
+        tile->setPinned(false);
+    m_status->setText(tr("Removed offline copy."));
+}
+
+void LibraryPage::handleAssetPinFailed(const QString &assetId, const QString &message)
+{
+    Q_UNUSED(assetId);
+    m_status->setText(tr("Couldn't keep this available offline: %1").arg(message));
 }
 
 void LibraryPage::confirmAndDelete(const ImmichAsset &asset, bool permanent)

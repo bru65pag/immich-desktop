@@ -1358,6 +1358,79 @@ void ImmichClient::deleteAssets(const QStringList &assetIds, bool permanent)
     });
 }
 
+void ImmichClient::pinAssetOffline(const QString &assetId)
+{
+    if (!isValidImmichId(assetId))
+        return;
+    const QString serverUrl = activeServerUrl();
+    if (serverUrl.isEmpty()) {
+        emit assetPinFailed(assetId, tr("No active server connection."));
+        return;
+    }
+
+    if (!m_pinnedCache.readDisk(assetId).isEmpty()) {
+        m_offlineStore.setAssetPinned(serverUrl, assetId, true);
+        emit assetPinned(assetId);
+        return;
+    }
+
+    const QByteArray cachedPreview = m_previewCache.readDisk(assetId);
+    if (!cachedPreview.isEmpty()) {
+        const QImage image = decodeImage(cachedPreview, 1920);
+        if (!image.isNull()) {
+            m_pinnedCache.store(assetId, cachedPreview, QPixmap::fromImage(image));
+            m_offlineStore.setAssetPinned(serverUrl, assetId, true);
+            emit assetPinned(assetId);
+            return;
+        }
+    }
+
+    // Not cached yet: piggyback on the normal preview fetch/cache path and
+    // promote the result into the pinned (eviction-exempt) cache once it lands.
+    auto loadedConn = std::make_shared<QMetaObject::Connection>();
+    auto failedConn = std::make_shared<QMetaObject::Connection>();
+
+    *loadedConn = connect(this, &ImmichClient::previewLoaded, this,
+        [this, assetId, serverUrl, loadedConn, failedConn](const QString &loadedId,
+                                                            const QPixmap &pixmap) {
+            if (loadedId != assetId)
+                return;
+            QObject::disconnect(*loadedConn);
+            QObject::disconnect(*failedConn);
+            const QByteArray bytes = m_previewCache.readDisk(assetId);
+            m_pinnedCache.store(assetId, bytes, pixmap);
+            m_offlineStore.setAssetPinned(serverUrl, assetId, true);
+            emit assetPinned(assetId);
+        });
+    *failedConn = connect(this, &ImmichClient::imageLoadFailed, this,
+        [this, assetId, loadedConn, failedConn](const QString &failedId,
+                                                 const QString &resultSize,
+                                                 const QString &message) {
+            if (failedId != assetId || resultSize != QStringLiteral("preview"))
+                return;
+            QObject::disconnect(*loadedConn);
+            QObject::disconnect(*failedConn);
+            emit assetPinFailed(assetId, message);
+        });
+
+    loadPreview(assetId);
+}
+
+void ImmichClient::unpinAssetOffline(const QString &assetId)
+{
+    if (assetId.isEmpty())
+        return;
+    const QString serverUrl = activeServerUrl();
+    m_pinnedCache.remove(assetId);
+    m_offlineStore.setAssetPinned(serverUrl, assetId, false);
+    emit assetUnpinned(assetId);
+}
+
+bool ImmichClient::isAssetPinned(const QString &assetId) const
+{
+    return m_offlineStore.isAssetPinned(activeServerUrl(), assetId);
+}
+
 void ImmichClient::loadImageAsync(const QString &assetId, const QString &resultSize)
 {
     if (!ensureConfigured(tr("Load image")))
@@ -1445,7 +1518,9 @@ void ImmichClient::loadImageAsync(const QString &assetId, const QString &resultS
                 }
             }
         } else if (resultSize == QStringLiteral("preview")) {
-            const QByteArray cachedBytes = self->m_previewCache.readDisk(assetId);
+            QByteArray cachedBytes = self->m_pinnedCache.readDisk(assetId);
+            if (cachedBytes.isEmpty())
+                cachedBytes = self->m_previewCache.readDisk(assetId);
             if (!cachedBytes.isEmpty()) {
                 const QImage image = self->decodeImage(cachedBytes, 1920);
                 if (!image.isNull()) {

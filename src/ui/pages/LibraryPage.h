@@ -61,6 +61,11 @@ private slots:
     void pasteFromClipboard();
     void trashAsset(const Aurora::ImmichAsset &asset);
     void deleteAssetPermanently(const Aurora::ImmichAsset &asset);
+    void pinAsset(const Aurora::ImmichAsset &asset);
+    void unpinAsset(const Aurora::ImmichAsset &asset);
+    void handleAssetPinned(const QString &assetId);
+    void handleAssetUnpinned(const QString &assetId);
+    void handleAssetPinFailed(const QString &assetId, const QString &message);
     void handleAssetsDeleted(const QStringList &assetIds, bool permanent);
     void handleUploadProgress(const QString &filePath, qint64 bytesSent, qint64 bytesTotal);
     void handleAssetUploaded(const QString &filePath, const QString &assetId, bool duplicate);

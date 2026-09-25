@@ -56,6 +56,9 @@ public:
                        const QString &suggestedFileName = {});
     void fetchAssetOriginal(const QString &assetId);
     void deleteAssets(const QStringList &assetIds, bool permanent = false);
+    void pinAssetOffline(const QString &assetId);
+    void unpinAssetOffline(const QString &assetId);
+    bool isAssetPinned(const QString &assetId) const;
     bool isUploading() const;
     bool isDownloading() const;
     int pendingUploadCount() const;
@@ -86,6 +89,9 @@ signals:
     void assetOriginalFetched(const QString &assetId, const QByteArray &bytes,
                               const QString &contentType);
     void assetsDeleted(const QStringList &assetIds, bool permanent);
+    void assetPinned(const QString &assetId);
+    void assetUnpinned(const QString &assetId);
+    void assetPinFailed(const QString &assetId, const QString &message);
     void requestFailed(const QString &operation, const QString &message);
     void transferActivityChanged();
 
@@ -129,6 +135,7 @@ private:
     ThumbnailCache m_thumbnailCache;
     ThumbnailCache m_previewCache{QStringLiteral("previews"), 64 * 1024,
                                   512LL * 1024 * 1024};
+    ThumbnailCache m_pinnedCache{QStringLiteral("previews-pinned"), 32 * 1024};
     OfflineStore m_offlineStore;
     UploadQueueStore m_uploadQueueStore;
     QThreadPool m_imagePool;
