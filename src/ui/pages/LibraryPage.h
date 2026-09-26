@@ -31,6 +31,7 @@ class LibraryPage final : public QWidget {
 
 public:
     explicit LibraryPage(ImmichClient *client, QWidget *parent = nullptr);
+    void setCompactGrid(bool enabled);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -82,12 +83,14 @@ private slots:
     void handleActiveEndpointChanged(bool usingLocal, const QString &activeUrl);
     void handleOnlineChanged(bool online);
     void handleUploadQueueChanged(int pendingCount);
+    void cancelQueuedUpload(const Aurora::ImmichAsset &placeholder);
 
 private:
     struct DaySection {
         QDate date;
         QLabel *header = nullptr;
         QList<MediaTile *> tiles;
+        bool isPendingUploads = false;
     };
 
     void requestPage(int page, bool append);
@@ -117,6 +120,12 @@ private:
     int assetIndex(const QString &assetId) const;
     void updateSelectionBar();
     void setTileSelected(const QString &assetId, bool selected);
+    void addPendingUploadTile(const QString &absolutePath);
+    void removePendingUploadTile(const QString &absolutePath);
+    void clearPendingUploadTiles();
+    QPixmap loadLocalThumbnail(const QString &path) const;
+    static bool isVideoFile(const QString &path);
+    DaySection *pendingUploadsSection();
 
     ImmichClient *m_client;
     QScrollArea *m_scrollArea;
@@ -142,6 +151,8 @@ private:
     QSet<QString> m_selectedAssetIds;
     QString m_selectionAnchorId;
     bool m_selectionModeActive = false;
+    bool m_compactGrid = false;
+    QHash<QString, MediaTile *> m_pendingUploadTiles;
     QSet<QString> m_requestedThumbnails;
     QList<ImmichAsset> m_assets;
     QString m_nextPage;

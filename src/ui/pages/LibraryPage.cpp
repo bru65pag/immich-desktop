@@ -23,6 +23,7 @@
 #include <QHideEvent>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QImageReader>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -100,6 +101,7 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     connect(m_searchDebounce, &QTimer::timeout, this, &LibraryPage::applySearch);
     setObjectName(QStringLiteral("libraryPage"));
     setAcceptDrops(true);
+    m_compactGrid = AppSettings().loadTimeline().compactGrid;
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -261,6 +263,14 @@ LibraryPage::LibraryPage(ImmichClient *client, QWidget *parent)
     });
 }
 
+void LibraryPage::setCompactGrid(bool enabled)
+{
+    if (m_compactGrid == enabled)
+        return;
+    m_compactGrid = enabled;
+    scheduleLayout();
+}
+
 void LibraryPage::refresh()
 {
     if (m_loading)
@@ -348,7 +358,7 @@ void LibraryPage::requestPage(int page, bool append)
 LibraryPage::DaySection *LibraryPage::sectionForDate(const QDate &date)
 {
     for (DaySection &section : m_sections) {
-        if (section.date == date)
+        if (!section.isPendingUploads && section.date == date)
             return &section;
     }
 
@@ -495,6 +505,7 @@ void LibraryPage::showRequestError(const QString &operation, const QString &mess
             m_uploadsCompleted = 0;
             m_uploadsFailed = 0;
             m_uploadsTotal = 0;
+            clearPendingUploadTiles();
             if (completed > 0)
                 QTimer::singleShot(600, this, &LibraryPage::refresh);
         } else {
@@ -519,13 +530,18 @@ void LibraryPage::clearTimeline()
     if (m_videoHoverPreview)
         m_videoHoverPreview->stop();
 
+    QList<DaySection> preservedSections;
     for (DaySection &section : m_sections) {
+        if (section.isPendingUploads) {
+            preservedSections.append(section);
+            continue;
+        }
         if (section.header)
             section.header->deleteLater();
         for (MediaTile *tile : section.tiles)
             tile->deleteLater();
     }
-    m_sections.clear();
+    m_sections = preservedSections;
     m_tilesById.clear();
     m_requestedThumbnails.clear();
     m_assets.clear();
@@ -540,6 +556,36 @@ void LibraryPage::layoutTimeline()
 {
     const int viewportWidth = m_scrollArea->viewport()->width();
     const int availableWidth = qMax(240, viewportWidth - 2 * kSidePad);
+
+    if (m_compactGrid) {
+        constexpr int kGridGap = 3;
+        constexpr int kTargetCellSize = 132;
+        const int startY = 8;
+        const int columns = qMax(1, (availableWidth + kGridGap) / (kTargetCellSize + kGridGap));
+        const int cellSize = (availableWidth - (columns - 1) * kGridGap) / columns;
+
+        int index = 0;
+        for (DaySection &section : m_sections) {
+            if (section.header)
+                section.header->hide();
+            for (MediaTile *tile : section.tiles) {
+                const int col = index % columns;
+                const int row = index / columns;
+                tile->setGeometry(kSidePad + col * (cellSize + kGridGap),
+                                  startY + row * (cellSize + kGridGap), cellSize, cellSize);
+                tile->show();
+                ++index;
+            }
+        }
+
+        const int totalRows = (index + columns - 1) / columns;
+        m_timelineHost->resize(viewportWidth,
+                               startY + totalRows * (cellSize + kGridGap) + 16);
+        scheduleVisibleMediaUpdate();
+        QTimer::singleShot(0, this, &LibraryPage::maybeLoadMore);
+        return;
+    }
+
     int y = 8;
 
     for (int sectionIndex = 0; sectionIndex < m_sections.size();) {
@@ -690,7 +736,7 @@ void LibraryPage::updateVisibleMedia()
 
 void LibraryPage::updateEmptyState()
 {
-    const bool empty = m_assets.isEmpty();
+    const bool empty = m_assets.isEmpty() && m_pendingUploadTiles.isEmpty();
     m_emptyState->setVisible(empty);
     m_scrollArea->setVisible(!empty);
     if (!empty)
@@ -1320,6 +1366,8 @@ void LibraryPage::enqueueUploads(const QStringList &paths)
     }
 
     m_uploadsTotal += uploadable.size();
+    for (const QString &path : uploadable)
+        addPendingUploadTile(path);
     if (!m_client->isOnline()) {
         m_status->setText(
             tr("Queued %n file(s) for upload when online.", nullptr, uploadable.size()));
@@ -1350,6 +1398,7 @@ void LibraryPage::handleAssetUploaded(const QString &filePath, const QString &as
 {
     Q_UNUSED(assetId);
     cleanupPasteTemp(filePath);
+    removePendingUploadTile(QFileInfo(filePath).absoluteFilePath());
     ++m_uploadsCompleted;
     const QString name = QFileInfo(filePath).fileName();
     const int remaining = m_client->pendingUploadCount();
@@ -1367,6 +1416,7 @@ void LibraryPage::handleAssetUploaded(const QString &filePath, const QString &as
         m_uploadsCompleted = 0;
         m_uploadsFailed = 0;
         m_uploadsTotal = 0;
+        clearPendingUploadTiles();
         if (completed > 0)
             QTimer::singleShot(600, this, &LibraryPage::refresh);
     } else {
@@ -1390,6 +1440,129 @@ void LibraryPage::handleAssetDownloaded(const QString &assetId, const QString &d
 {
     Q_UNUSED(assetId);
     m_status->setText(tr("Saved to %1").arg(QFileInfo(destinationPath).absoluteFilePath()));
+}
+
+bool LibraryPage::isVideoFile(const QString &path)
+{
+    static const QSet<QString> extensions = {
+        QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("m4v"),
+        QStringLiteral("avi"), QStringLiteral("mkv"), QStringLiteral("webm"),
+        QStringLiteral("3gp"),
+    };
+    return extensions.contains(QFileInfo(path).suffix().toLower());
+}
+
+QPixmap LibraryPage::loadLocalThumbnail(const QString &path) const
+{
+    if (isVideoFile(path))
+        return {};
+
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    constexpr int kMaxDimension = 256;
+    const QSize sourceSize = reader.size();
+    if (sourceSize.isValid() &&
+        (sourceSize.width() > kMaxDimension || sourceSize.height() > kMaxDimension)) {
+        reader.setScaledSize(
+            sourceSize.scaled(kMaxDimension, kMaxDimension, Qt::KeepAspectRatio));
+    }
+    const QImage image = reader.read();
+    return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
+}
+
+LibraryPage::DaySection *LibraryPage::pendingUploadsSection()
+{
+    for (DaySection &section : m_sections) {
+        if (section.isPendingUploads)
+            return &section;
+    }
+
+    DaySection section;
+    section.isPendingUploads = true;
+    section.header = new QLabel(tr("Uploading"), m_timelineHost);
+    section.header->setObjectName(QStringLiteral("timelineDayHeader"));
+    section.header->setProperty("section", true);
+    m_sections.prepend(section);
+    return &m_sections.first();
+}
+
+void LibraryPage::addPendingUploadTile(const QString &absolutePath)
+{
+    if (m_pendingUploadTiles.contains(absolutePath))
+        return;
+
+    ImmichAsset placeholder;
+    placeholder.id = QStringLiteral("local:") + absolutePath;
+    placeholder.fileName = QFileInfo(absolutePath).fileName();
+    placeholder.type =
+        isVideoFile(absolutePath) ? QStringLiteral("VIDEO") : QStringLiteral("IMAGE");
+
+    auto *tile = new MediaTile(placeholder, m_timelineHost);
+    tile->setUploadPending(true);
+    const QPixmap thumbnail = loadLocalThumbnail(absolutePath);
+    if (!thumbnail.isNull())
+        tile->setThumbnail(thumbnail);
+    connect(tile, &MediaTile::cancelUploadRequested, this, &LibraryPage::cancelQueuedUpload);
+
+    pendingUploadsSection()->tiles.append(tile);
+    m_pendingUploadTiles.insert(absolutePath, tile);
+    scheduleLayout();
+    updateEmptyState();
+}
+
+void LibraryPage::removePendingUploadTile(const QString &absolutePath)
+{
+    MediaTile *tile = m_pendingUploadTiles.take(absolutePath);
+    if (!tile)
+        return;
+    tile->deleteLater();
+
+    for (int i = 0; i < m_sections.size(); ++i) {
+        DaySection &section = m_sections[i];
+        if (!section.isPendingUploads)
+            continue;
+        section.tiles.removeAll(tile);
+        if (section.tiles.isEmpty()) {
+            if (section.header)
+                section.header->deleteLater();
+            m_sections.removeAt(i);
+        }
+        break;
+    }
+    scheduleLayout();
+    updateEmptyState();
+}
+
+void LibraryPage::clearPendingUploadTiles()
+{
+    if (m_pendingUploadTiles.isEmpty())
+        return;
+    for (MediaTile *tile : std::as_const(m_pendingUploadTiles))
+        tile->deleteLater();
+    m_pendingUploadTiles.clear();
+
+    for (int i = 0; i < m_sections.size(); ++i) {
+        if (!m_sections[i].isPendingUploads)
+            continue;
+        if (m_sections[i].header)
+            m_sections[i].header->deleteLater();
+        m_sections.removeAt(i);
+        break;
+    }
+    scheduleLayout();
+    updateEmptyState();
+}
+
+void LibraryPage::cancelQueuedUpload(const ImmichAsset &placeholder)
+{
+    if (!placeholder.id.startsWith(QStringLiteral("local:")))
+        return;
+    const QString absolutePath = placeholder.id.mid(QStringLiteral("local:").size());
+    m_client->cancelQueuedUpload(absolutePath);
+    removePendingUploadTile(absolutePath);
+    if (m_uploadsTotal > 0)
+        --m_uploadsTotal;
+    m_status->setText(tr("Cancelled upload: %1").arg(placeholder.fileName));
 }
 
 bool LibraryPage::isUploadableFile(const QString &path) const

@@ -53,6 +53,7 @@ public:
     void loadPreview(const QString &assetId);
     void loadPersonThumbnail(const QString &personId);
     void uploadAssets(const QStringList &filePaths);
+    void cancelQueuedUpload(const QString &filePath);
     void downloadAsset(const QString &assetId, const QString &destinationPath,
                        const QString &suggestedFileName = {});
     void fetchAssetOriginal(const QString &assetId);

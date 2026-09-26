@@ -127,6 +127,20 @@ void MediaTile::paintEvent(QPaintEvent *)
                          m_hasError ? m_error : tr("…"));
     }
 
+    if (m_uploadPending) {
+        painter.fillRect(rect(), QColor(0, 0, 0, 110));
+        const QPixmap uploadIcon =
+            renderSvgIcon(QStringLiteral(":/icons/upload.svg"), Qt::white, QSize(20, 20));
+        if (!uploadIcon.isNull()) {
+            painter.drawPixmap((width() - uploadIcon.width()) / 2,
+                               height() / 2 - uploadIcon.height() - 4, uploadIcon);
+        }
+        painter.setPen(Qt::white);
+        painter.drawText(QRect(4, height() / 2 + 2, width() - 8, height() / 2 - 8),
+                         Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, tr("Queued"));
+        return;
+    }
+
     constexpr int kPinBadgeDiameter = 22;
     constexpr int kPinBadgeMargin = 8;
     QRect pinBadgeRect;
@@ -275,7 +289,7 @@ void MediaTile::mousePressEvent(QMouseEvent *event)
 
 void MediaTile::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && !m_pressedOnCheckbox &&
+    if (event->button() == Qt::LeftButton && !m_pressedOnCheckbox && !m_uploadPending &&
         rect().contains(event->position().toPoint()))
         emit activated(m_asset);
     m_pressedOnCheckbox = false;
@@ -285,6 +299,12 @@ void MediaTile::mouseReleaseEvent(QMouseEvent *event)
 void MediaTile::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
+    if (m_uploadPending) {
+        menu.addAction(tr("Cancel upload"), this,
+                      [this] { emit cancelUploadRequested(m_asset); });
+        menu.exec(event->globalPos());
+        return;
+    }
     menu.addAction(tr("Open"), this, [this] { emit activated(m_asset); });
     if (!m_asset.isVideo())
         menu.addAction(tr("Copy"), this, [this] { emit copyRequested(m_asset); });
@@ -344,7 +364,22 @@ QRect MediaTile::checkboxRect() const
 
 bool MediaTile::checkboxVisible() const
 {
+    if (m_uploadPending)
+        return false;
     return m_selected || m_selectionModeActive || m_hovered;
+}
+
+void MediaTile::setUploadPending(bool pending)
+{
+    if (m_uploadPending == pending)
+        return;
+    m_uploadPending = pending;
+    update();
+}
+
+bool MediaTile::isUploadPending() const
+{
+    return m_uploadPending;
 }
 
 } // namespace Aurora

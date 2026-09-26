@@ -38,6 +38,8 @@ public:
     void setSelected(bool selected);
     bool isSelected() const;
     void setSelectionModeActive(bool active);
+    void setUploadPending(bool pending);
+    bool isUploadPending() const;
 
 signals:
     void activated(const Aurora::ImmichAsset &asset);
@@ -50,6 +52,7 @@ signals:
     void unpinRequested(const Aurora::ImmichAsset &asset);
     void toggleSelectRequested(const Aurora::ImmichAsset &asset);
     void rangeSelectRequested(const Aurora::ImmichAsset &asset);
+    void cancelUploadRequested(const Aurora::ImmichAsset &asset);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -78,6 +81,7 @@ private:
     bool m_selectionModeActive = false;
     bool m_hovered = false;
     bool m_pressedOnCheckbox = false;
+    bool m_uploadPending = false;
 };
 
 } // namespace Aurora

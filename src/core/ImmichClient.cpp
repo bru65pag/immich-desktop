@@ -940,6 +940,18 @@ void ImmichClient::uploadAssets(const QStringList &filePaths)
     processUploadQueue();
 }
 
+void ImmichClient::cancelQueuedUpload(const QString &filePath)
+{
+    const QString absolute = QFileInfo(filePath).absoluteFilePath();
+    if (absolute.isEmpty() || m_uploadInFlightPath == absolute)
+        return;
+    if (m_uploadQueue.removeAll(absolute) > 0) {
+        persistUploadQueue();
+        emit uploadQueueChanged(pendingUploadCount());
+        emit transferActivityChanged();
+    }
+}
+
 void ImmichClient::persistUploadQueue()
 {
     QStringList all = m_uploadQueue;
